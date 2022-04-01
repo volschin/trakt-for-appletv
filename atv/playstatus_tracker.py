@@ -11,7 +11,7 @@ import time
 class PlaybackState:
     app: Optional[str] = None
     metadata: Optional[ContentItemMetadata] = field(repr=False, default=None, compare=False, hash=False)
-    device_state: const.DeviceState = field(default=const.DeviceState.Idle, compare=True, hash=False),
+    device_state: const.DeviceState = const.DeviceState.Idle,
     title: Optional[str] = None,
     total_time: Optional[int] = None,
     position: Optional[int] = field(default=0, compare=False, hash=False),
@@ -22,8 +22,8 @@ class PlaybackState:
     time: float = field(repr=False, default=0, compare=False, hash=False)
 
     def __eq__(self, other):
-        return (self.device_state == other.device_state and
-                self.title == other.title and
+        return (self.title == other.title and
+                self.device_state == other.device_state and
                 self.app == other.app and
                 self.total_time == other.total_time and
                 self.series_name == other.series_name and
@@ -31,9 +31,15 @@ class PlaybackState:
                 self.episode_number == other.episode_number and
                 self.content_identifier == other.content_identifier)
 
-    def has_changed_from(self, obj) -> bool:
-        return self != obj or \
-               (isinstance(obj, PlaybackState) and (self.position - obj.position) - (self.time - obj.time) > 0)
+    def is_playing(self) -> bool:
+        return self.device_state == const.DeviceState.Playing
+
+    def has_valid_metadata(self) -> bool:
+        return (self.title or
+                self.series_name or
+                self.season_number or
+                self.episode_number or
+                self.device_state == const.DeviceState.Idle)
 
 
 class PlayStatusTracker(TVProtocol):
@@ -42,17 +48,48 @@ class PlayStatusTracker(TVProtocol):
 
     def __init__(self, atv, conf):
         super().__init__(atv, conf)
-        self.curr_state = PlaybackState()
-        self.prev_state = PlaybackState()
+        self.curr_state = PlaybackState(position=0, time=0)
+        self.prev_state = PlaybackState(position=0, time=0)
 
     def playstatus_update(self, updater, playstatus: Playing):
         # super().playstatus_update(updater, playstatus)
-        self.prev_state = self.curr_state
-        self.curr_state = self._make_state(updater, playstatus)
-        if self.curr_state.has_changed_from(self.prev_state):
-            self.playstatus_changed()
+        new_state = self._make_state(updater, playstatus)
+        if new_state.has_valid_metadata():
+            self.prev_state = self.curr_state
+            self.curr_state = new_state
+            self._register_change_notification()
+        else:
+            self.print_warning(new_state)
 
-    def _make_state(self, updater, playstatus: Playing):
+    def _register_change_notification(self):
+        if self._states_differ() or self._positions_differ():
+            self.playstatus_changed()
+        else:
+            self.print_warning(self.curr_state, failure=True)
+
+    def _states_differ(self) -> bool:
+        """Compares equality of previous and current playback states ignoring position, time, and metadata properties.
+        :return: True if states differ, False otherwise
+        """
+
+        return self.prev_state != self.curr_state
+
+    def _positions_differ(self, sec_threshold=1) -> bool:
+        """Determines if playback position differs from the time passed if both prev and curr states are playing
+        otherwise if playback position difference is more than the sec_threshold
+        intended to reduce meaningless playstatus updates some apps send
+
+        :param sec_threshold: amount of seconds required before difference is registered
+        :return:
+        """
+
+        pos_diff = abs(self.curr_state.position - self.prev_state.position)
+        if self.curr_state.is_playing() and self.prev_state.is_playing():
+            time_passed = int(self.curr_state.time - self.prev_state.time)
+            return pos_diff - (time_passed + sec_threshold) > 0
+        return pos_diff - sec_threshold > 0
+
+    def _make_state(self, updater, playstatus: Playing) -> PlaybackState:
         return PlaybackState(app=self.atv.metadata.app.identifier if self.atv.metadata.app else None,
                              metadata=updater.psm.playing.metadata,
                              device_state=playstatus.device_state,
@@ -67,3 +104,9 @@ class PlayStatusTracker(TVProtocol):
 
     def playstatus_changed(self):
         raise NotImplementedError
+
+    @staticmethod
+    def print_warning(message, failure: bool = False):
+        color = '\033[93m' if not failure else '\033[91m'
+        end = '\033[0m'
+        # print(f"{color}{message}{end}")
