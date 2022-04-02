@@ -18,7 +18,6 @@ class TVProtocol(PushListener, DeviceListener):
     atv: AppleTV
 
     def __init__(self, atv, conf):
-        super().__init__()
         self.atv = atv
         self.conf = conf
         self.protocol = cast(

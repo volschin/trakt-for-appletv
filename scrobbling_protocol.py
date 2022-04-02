@@ -1,30 +1,223 @@
-import time
+import asyncio
+import re
+from json import JSONDecodeError
+from urllib.error import HTTPError
+from urllib.parse import urlencode
+from urllib.request import urlopen, Request
+
+from dateutil import parser
+from lxml import etree
+from io import BytesIO
+import json
+
+import requests
+from pyatv.protocols.mrp.protobuf import ProtocolMessage
 
 from atv.playstatus_tracker import PlayStatusTracker
+from helpers.trakt_scrobbler import TraktScrobbler
 
 
-class ScrobblingProtocol(PlayStatusTracker):
+class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
 
     def __init__(self, atv, conf):
-        super().__init__(atv, conf)
+        self.netflix_titles = {}
+        self.itunes_titles = {}
+        self.amazon_titles = {}
+        self.now_playing_description = None
         self.app_handlers = {'com.apple.TVShows': self.handle_tvshows,
                              'com.apple.TVWatchList': self.handle_tv_app,
                              'com.apple.TVMovies': self.handle_movies,
                              'com.netflix.Netflix': self.handle_netflix}
+        self.pending_scrobble = None
+        super(ScrobblingProtocol, self).__init__(atv, conf)
+        self.init_trakt()
 
     def playstatus_changed(self):
+        if self.curr_state.app not in self.app_handlers and not self.curr_state.is_idle():
+            return
+
+        self.handle_state_change()
+
+    def handle_state_change(self):
+        if self.pending_scrobble:
+            self.pending_scrobble.cancel()
+            self.pending_scrobble = None
+
+        self.pending_scrobble = asyncio.create_task(
+            self.post_trakt_update()
+        )
+        self.pending_scrobble.add_done_callback(self._handle_task_result)
+
+    async def post_trakt_update(self, after=1):
+        await asyncio.sleep(after)
         print(self.curr_state)
-        time.sleep(1)
+
+        if self.curr_state.is_playing():
+            handler = self.app_handlers[self.curr_state.app]
+            if handler:
+                await handler()
+        else:
+            if self.currently_scrobbling:
+                await self.stop_scrobbling()
+
+        self.pending_scrobble = None
+
+    async def handle_tvshows(self):
+        if self.curr_state.has_tv_info():
+            season_number = self.curr_state.season_number
+            episode_number = self.curr_state.episode_number
+        else:
+            info = await self.get_itunes_title(self.curr_state.content_identifier)
+            if info is None:
+                print("OOPS")
+                return
+            if type(info) is dict and 'kind' in info:
+                movie = {'title': dict(info)['trackName'],
+                         'year': parser.parse(dict(info)['releaseDate']).year}
+                print(f"Playing iTunes Movie: {movie['title']}")
+                await self.start_scrobbling(movie=movie, progress=self.curr_state.progress)
+                return
+
+            season_number, episode_number = info
+        print(f"Playing iTunes Show: {self.curr_state.get_title()} S{season_number}E{episode_number}")
+        await self.start_scrobbling(show={'title': self.curr_state.get_title()},
+                                    episode={'season': season_number, 'number': episode_number},
+                                    progress=self.curr_state.progress)
+
+    async def get_itunes_title(self, content_identifier):
+        known = self.itunes_titles.get(content_identifier)
+        if known:
+            return known['season'], known['episode']
+
+        try:
+            result = requests.get(f'https://itunes.apple.com/lookup?id=' + content_identifier).json()
+        except JSONDecodeError:
+            self.print_warning("JSON ERROR")
+            result = {'resultCount': 0}
+
+        if result.get('resultCount') == 0 or 'errorMessage' in result:
+            print('no result')
+            result = await self.get_apple_tv_plus_info(self.curr_state.get_title())
+            if not result:
+                return None
+            season, episode = result
+        else:
+            result = result['results'][0]
+            if result['kind'] == 'feature-movie':
+                return result
+            match = re.match("^Season (\\d\\d?), Episode (\\d\\d?): ", result['trackName'])
+            if match is not None:
+                season = int(match.group(1))
+                episode = int(match.group(2))
+            else:
+                season = int(re.match(".*, Season (\\d\\d?)( \\(Uncensored\\))?$", result['collectionName']).group(1))
+                episode = int(result['trackNumber'])
+        self.itunes_titles[content_identifier] = {'season': season, 'episode': episode}
+        return season, episode
+
+    async def get_apple_tv_plus_info(self, title):
+        data = await self.search_by_description("site:tv.apple.com " + title)
+
+        if not data:
+            return None
+
+        match = re.search('(https://tv\\.apple\\.com/(../)?episode/.*?)\"', data)
+        if not match:
+            return None
+
+        try:
+            data = urlopen(match.group(1)).read()
+        except HTTPError:
+            return None
+
+        xml = etree.parse(BytesIO(data), etree.HTMLParser())
+        for script in xml.xpath('//script'):
+            if not script.text:
+                continue
+            try:
+                for d in list(json.loads(script.text).values()):
+                    if type(d) is not str:
+                        continue
+                    try:
+                        d = json.loads(d)
+                        if 'd' in d and 'data' in d['d'] and 'content' in d['d']['data']:
+                            info = d['d']['data']['content']
+                            if 'seasonNumber' in info:
+                                return info['seasonNumber'], info['episodeNumber']
+                    except JSONDecodeError:
+                        continue
+            except JSONDecodeError:
+                continue
+
+        return None
+
+    async def search_by_description(self, query):
+        self.now_playing_description = await self.request_now_playing_description()
+
+        query += ' "' + self.now_playing_description + '"'
+        try:
+            return urlopen(Request("https://bing.com/search?" + urlencode({"q": query}), headers={
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 '
+                              '(KHTML, like Gecko) Version/14.0 Safari/605.1.15'
+            })).read().decode('utf-8')
+        except HTTPError:
+            return None
+
+    async def handle_tv_app(self):
+        await self.handle_tvshows()
         return
 
-    def handle_tvshows(self):
-        return
+    async def handle_movies(self):
+        movie = {}
+        match = re.search('(.*) \\((\\d\\d\\d\\d)\\)', self.curr_state.metadata.title)
+        if match is None:
+            movie['title'] = self.curr_state.title
+        else:
+            movie['title'] = match.group(1)
+            movie['year'] = match.group(2)
+        print(f"Playing iTunes Movie: {movie['title']}")
+        await self.start_scrobbling(movie=movie, progress=self.curr_state.progress)
 
-    def handle_tv_app(self):
-        return
+    async def handle_netflix(self):
+        if not self.curr_state.title:
+            await asyncio.sleep(1)
+        match = re.match('^S(\\d\\d?): E(\\d\\d?) (.*)', self.curr_state.title)
+        if match is not None:
+            key = self.curr_state.title + str(self.curr_state.total_time)
+            title = self.netflix_titles.get(key)
+            if not title:
+                if self.curr_state.content_identifier:
+                    title = self.get_netflix_title(self.curr_state.content_identifier)
+                else:
+                    title = await self.get_netflix_title_from_description(match.group(1), match.group(3))
+                    if not title:
+                        print("Error: Netflix title not found")
+                        return
+                self.netflix_titles[key] = title
+            if title:
+                print(f"Playing Netflix Show: {title} S{match.group(1)}E{match.group(2)}")
+                await self.start_scrobbling(show={'title': title},
+                                            episode={'season': match.group(1), 'number': match.group(2)},
+                                            progress=self.curr_state.progress)
+        else:
+            print("Netflix Movie:", self.curr_state.title)
+            await self.start_scrobbling(movie={'title': self.curr_state.title}, progress=self.curr_state.progress)
 
-    def handle_movies(self):
-        return
+    async def get_netflix_title_from_description(self, season, episode_title):
+        data = await self.search_by_description("site:netflix.com Season " + season + " " + episode_title)
+        if not data:
+            return None
 
-    def handle_netflix(self):
-        return
+        match = re.search('netflix\\.com/(.+/)?title/(\\d+)', data)
+        if not match:
+            return None
+        content_identifier = match.group(2)
+        title = self.get_netflix_title(content_identifier)
+        return title
+
+    @staticmethod
+    def get_netflix_title(content_identifier):
+        data = urlopen('https://www.netflix.com/title/' + content_identifier).read()
+        xml = etree.parse(BytesIO(data), etree.HTMLParser())
+        info = json.loads(xml.xpath('//script')[0].text)
+        return info['name']

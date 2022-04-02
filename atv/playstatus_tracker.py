@@ -1,8 +1,13 @@
+import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Optional
 from pyatv import const
 from pyatv.interface import Playing, App
-from pyatv.protocols.mrp.protobuf import ContentItemMetadata
+from pyatv.protocols.mrp import MrpProtocol
+from google.protobuf.json_format import MessageToDict
+from pyatv.protocols.mrp.messages import create
+from pyatv.protocols.mrp.protobuf import ContentItemMetadata, ProtocolMessage, TransactionMessage_pb2, ContentItem_pb2
 from atv.tv_protocol import TVProtocol
 import time
 
@@ -13,6 +18,7 @@ class PlaybackState:
     metadata: Optional[ContentItemMetadata] = field(repr=False, default=None, compare=False, hash=False)
     device_state: const.DeviceState = const.DeviceState.Idle,
     title: Optional[str] = None,
+    progress: Optional[int] = field(init=False, compare=False, hash=False),
     total_time: Optional[int] = None,
     position: Optional[int] = field(default=0, compare=False, hash=False),
     series_name: Optional[str] = None,
@@ -20,6 +26,11 @@ class PlaybackState:
     episode_number: Optional[int] = None,
     content_identifier: Optional[str] = None,
     time: float = field(repr=False, default=0, compare=False, hash=False)
+
+    def __post_init__(self):
+        total_time = self.total_time if type(self.total_time) == int else 1
+        position = self.position if type(self.position) == int else 0
+        object.__setattr__(self, 'progress', round(position * 100 / total_time, 1))
 
     def __eq__(self, other):
         return (self.title == other.title and
@@ -34,12 +45,21 @@ class PlaybackState:
     def is_playing(self) -> bool:
         return self.device_state == const.DeviceState.Playing
 
+    def is_idle(self) -> bool:
+        return self.device_state == const.DeviceState.Idle
+
     def has_valid_metadata(self) -> bool:
         return (self.title or
                 self.series_name or
                 self.season_number or
                 self.episode_number or
                 self.device_state == const.DeviceState.Idle)
+
+    def get_title(self) -> str:
+        return self.series_name or self.title
+
+    def has_tv_info(self) -> bool:
+        return self.season_number is not None and self.episode_number is not None
 
 
 class PlayStatusTracker(TVProtocol):
@@ -52,7 +72,6 @@ class PlayStatusTracker(TVProtocol):
         self.prev_state = PlaybackState(position=0, time=0)
 
     def playstatus_update(self, updater, playstatus: Playing):
-        # super().playstatus_update(updater, playstatus)
         new_state = self._make_state(updater, playstatus)
         if new_state.has_valid_metadata():
             self.prev_state = self.curr_state
@@ -74,7 +93,7 @@ class PlayStatusTracker(TVProtocol):
 
         return self.prev_state != self.curr_state
 
-    def _positions_differ(self, sec_threshold=1) -> bool:
+    def _positions_differ(self, sec_threshold=9) -> bool:
         """Determines if playback position differs from the time passed if both prev and curr states are playing
         otherwise if playback position difference is more than the sec_threshold
         intended to reduce meaningless playstatus updates some apps send
@@ -83,10 +102,12 @@ class PlayStatusTracker(TVProtocol):
         :return:
         """
 
-        pos_diff = abs(self.curr_state.position - self.prev_state.position)
+        curr_pos = self.curr_state.position or 0
+        prev_pos = self.prev_state.position or 0
+        pos_diff = abs(curr_pos - prev_pos)
         if self.curr_state.is_playing() and self.prev_state.is_playing():
             time_passed = int(self.curr_state.time - self.prev_state.time)
-            return pos_diff - (time_passed + sec_threshold) > 0
+            return pos_diff - (time_passed + 1) > 0
         return pos_diff - sec_threshold > 0
 
     def _make_state(self, updater, playstatus: Playing) -> PlaybackState:
@@ -110,3 +131,34 @@ class PlayStatusTracker(TVProtocol):
         color = '\033[93m' if not failure else '\033[91m'
         end = '\033[0m'
         # print(f"{color}{message}{end}")
+
+    async def request_now_playing_description(self):
+        msg = create(ProtocolMessage.PLAYBACK_QUEUE_REQUEST_MESSAGE)
+        req = msg.inner()
+        req.location = 0
+        req.length = 1
+        req.includeInfo = True
+        response = await self.protocol.send_and_receive(msg)
+        state_msg = response.inner()
+        state_dict: dict = MessageToDict(state_msg)
+        try:
+            return state_dict['playbackQueue']['contentItems'][0]['info']
+        except KeyError:
+            return None
+
+    async def send_receive(self, msg: ProtocolMessage.type):
+        msg = create(msg)
+        response = await self.protocol.send_and_receive(msg)
+        state_dict: dict = MessageToDict(response)
+        print(state_dict)
+        return state_dict
+
+    @staticmethod
+    def _handle_task_result(task: asyncio.Task) -> None:
+        # noinspection PyBroadException
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            pass  # Task cancellation should not be logged as an error.
+        except Exception as e:
+            logging.exception('Exception raised by task = %r', task)
