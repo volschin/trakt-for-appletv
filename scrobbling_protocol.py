@@ -1,17 +1,17 @@
 import asyncio
 import re
 from json import JSONDecodeError
+from typing import Optional, Tuple
 from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen, Request
 
+import yaml
 from dateutil import parser
 from lxml import etree
 from io import BytesIO
 import json
-
 import requests
-from pyatv.protocols.mrp.protobuf import ProtocolMessage
 
 from atv.playstatus_tracker import PlayStatusTracker
 from helpers.trakt_scrobbler import TraktScrobbler
@@ -27,10 +27,21 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         self.app_handlers = {'com.apple.TVShows': self.handle_tvshows,
                              'com.apple.TVWatchList': self.handle_tv_app,
                              'com.apple.TVMovies': self.handle_movies,
-                             'com.netflix.Netflix': self.handle_netflix}
+                             'com.netflix.Netflix': self.handle_netflix,
+                             'com.amazon.aiv.AIVApp': self.handle_amazon}
         self.pending_scrobble = None
-        super(ScrobblingProtocol, self).__init__(atv, conf)
+        self.settings = self._read_settings()
         self.init_trakt()
+        super(ScrobblingProtocol, self).__init__(atv, conf)
+
+    async def cleanup(self) -> None:
+        """ Cancels any pending scrobble and closes the trakt connection """
+        if self.pending_scrobble:
+            self.pending_scrobble.cancel()
+            self.pending_scrobble = None
+
+        await self.stop_scrobbling()
+        await super(ScrobblingProtocol, self).cleanup()
 
     def playstatus_changed(self):
         if self.curr_state.app not in self.app_handlers and not self.curr_state.is_idle():
@@ -39,6 +50,7 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         self.handle_state_change()
 
     def handle_state_change(self):
+        """ Cancels any pending scrobble and creates a new one """
         if self.pending_scrobble:
             self.pending_scrobble.cancel()
             self.pending_scrobble = None
@@ -48,7 +60,10 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         )
         self.pending_scrobble.add_done_callback(self._handle_task_result)
 
-    async def post_trakt_update(self, after=1):
+    async def post_trakt_update(self, after=1) -> None:
+        """ Uses the correct handler for the current app to post the scrobble
+
+        :param after: The time to wait before handling a state change"""
         await asyncio.sleep(after)
         print(self.curr_state)
 
@@ -62,7 +77,8 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
 
         self.pending_scrobble = None
 
-    async def handle_tvshows(self):
+    async def handle_tvshows(self) -> None:
+        """ Starts scrobbling iTunes shows """
         if self.curr_state.has_tv_info():
             season_number = self.curr_state.season_number
             episode_number = self.curr_state.episode_number
@@ -84,7 +100,8 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
                                     episode={'season': season_number, 'number': episode_number},
                                     progress=self.curr_state.progress)
 
-    async def get_itunes_title(self, content_identifier):
+    async def get_itunes_title(self, content_identifier) -> (int, int):
+        """ Returns the season and episode number of the given content identifier."""
         known = self.itunes_titles.get(content_identifier)
         if known:
             return known['season'], known['episode']
@@ -102,7 +119,7 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
                 return None
             season, episode = result
         else:
-            result = result['results'][0]
+            result = result['results'][0]  # type: ignore
             if result['kind'] == 'feature-movie':
                 return result
             match = re.match("^Season (\\d\\d?), Episode (\\d\\d?): ", result['trackName'])
@@ -115,9 +132,9 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         self.itunes_titles[content_identifier] = {'season': season, 'episode': episode}
         return season, episode
 
-    async def get_apple_tv_plus_info(self, title):
+    async def get_apple_tv_plus_info(self, title: str) -> (int, int):
+        """ Returns the season and episode number of the given title."""
         data = await self.search_by_description("site:tv.apple.com " + title)
-
         if not data:
             return None
 
@@ -152,6 +169,7 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         return None
 
     async def search_by_description(self, query):
+        """ Searches for the given query on bing.com and returns the first result."""
         self.now_playing_description = await self.request_now_playing_description()
 
         query += ' "' + self.now_playing_description + '"'
@@ -163,11 +181,12 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         except HTTPError:
             return None
 
-    async def handle_tv_app(self):
+    async def handle_tv_app(self) -> None:
         await self.handle_tvshows()
         return
 
-    async def handle_movies(self):
+    async def handle_movies(self) -> None:
+        """ Start scrobbling iTunes movies."""
         movie = {}
         match = re.search('(.*) \\((\\d\\d\\d\\d)\\)', self.curr_state.metadata.title)
         if match is None:
@@ -178,7 +197,8 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         print(f"Playing iTunes Movie: {movie['title']}")
         await self.start_scrobbling(movie=movie, progress=self.curr_state.progress)
 
-    async def handle_netflix(self):
+    async def handle_netflix(self) -> None:
+        """ Start scrobbling Netflix."""
         if not self.curr_state.title:
             await asyncio.sleep(1)
         match = re.match('^S(\\d\\d?): E(\\d\\d?) (.*)', self.curr_state.title)
@@ -203,7 +223,36 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
             print("Netflix Movie:", self.curr_state.title)
             await self.start_scrobbling(movie={'title': self.curr_state.title}, progress=self.curr_state.progress)
 
-    async def get_netflix_title_from_description(self, season, episode_title):
+    async def handle_amazon(self) -> None:
+        """ Start scrobbling Amazon."""
+        title, season, episode = await self.get_amazon_details(self.curr_state.content_identifier)
+        await self.start_scrobbling(show={'title': title},
+                                    episode={'season': season, 'number': episode},
+                                    progress=self.curr_state.progress)
+
+    async def get_amazon_details(self, content_identifier) -> Tuple[str, str, str]:
+        """ Get the Amazon details for the given content identifier."""
+        content_identifier = content_identifier.rsplit(':', 1)[0]
+        known = self.amazon_titles.get(content_identifier)
+        if known:
+            return known['title'], known['season'], known['episode']
+        url = self.settings['amazon']['get_playback_resources_url'] % content_identifier
+        r = Request(url, None, {'Cookie': self.settings['amazon']['cookie']})
+        data = json.loads(urlopen(r).read().decode('utf-8'))
+        title = None
+        season = None
+        episode = data['catalogMetadata']['catalog']['episodeNumber']
+        for f in data['catalogMetadata']['family']['tvAncestors']:
+            if f['catalog']['type'] == 'SEASON':
+                season = f['catalog']['seasonNumber']
+            elif f['catalog']['type'] == 'SHOW':
+                title = f['catalog']['title'].replace("[OV/OmU]", "").replace("[OV]", "").replace("[Ultra HD]", "") \
+                    .replace("[dt./OV]", "").replace("(4K UHD)", "").strip()
+        self.amazon_titles[content_identifier] = {'title': title, 'season': season, 'episode': episode}
+        return title, season, episode
+
+    async def get_netflix_title_from_description(self, season, episode_title) -> Optional[str]:
+        """ Searches for the given season and episode title on bing.com and returns the title."""
         data = await self.search_by_description("site:netflix.com Season " + season + " " + episode_title)
         if not data:
             return None
@@ -217,7 +266,13 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
 
     @staticmethod
     def get_netflix_title(content_identifier):
+        """ Gets the title from netflix.com of the given content identifier."""
         data = urlopen('https://www.netflix.com/title/' + content_identifier).read()
         xml = etree.parse(BytesIO(data), etree.HTMLParser())
         info = json.loads(xml.xpath('//script')[0].text)
         return info['name']
+
+    @staticmethod
+    def _read_settings():
+        """ Reads the settings from the config file."""
+        return yaml.load(open('data/config.yml', 'r'), Loader=yaml.FullLoader)

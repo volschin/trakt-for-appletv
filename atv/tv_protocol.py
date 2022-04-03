@@ -29,11 +29,7 @@ class TVProtocol(PushListener, DeviceListener):
         # app = updater['metadata']['identifier']
         # update.psm.playing.metadata
         title = playstatus.title if playstatus.series_name is None else playstatus.series_name
-        metadata: ContentItemMetadata = updater.psm.playing.metadata
-
         print('{}: {} is {}'.format(self.atv.metadata.app.name, title, playstatus.device_state.name))
-        # print(f"\ttitle: {metadata.title}\n\tseries: {metadata.seriesName}\n\tseason: {metadata.seasonNumber}"
-        #       f"\n\tepisode: {metadata.episodeNumber}\n\tid: {metadata.contentIdentifier}")
 
     def playstatus_error(self, updater, exception):
         print(exception)

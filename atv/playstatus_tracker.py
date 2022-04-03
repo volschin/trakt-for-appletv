@@ -3,17 +3,17 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 from pyatv import const
-from pyatv.interface import Playing, App
-from pyatv.protocols.mrp import MrpProtocol
+from pyatv.interface import Playing
 from google.protobuf.json_format import MessageToDict
 from pyatv.protocols.mrp.messages import create
-from pyatv.protocols.mrp.protobuf import ContentItemMetadata, ProtocolMessage, TransactionMessage_pb2, ContentItem_pb2
+from pyatv.protocols.mrp.protobuf import ContentItemMetadata, ProtocolMessage
 from atv.tv_protocol import TVProtocol
 import time
 
 
 @dataclass(frozen=True)
 class PlaybackState:
+    """ A class to represent the current playback state """
     app: Optional[str] = None
     metadata: Optional[ContentItemMetadata] = field(repr=False, default=None, compare=False, hash=False)
     device_state: const.DeviceState = const.DeviceState.Idle,
@@ -28,6 +28,7 @@ class PlaybackState:
     time: float = field(repr=False, default=0, compare=False, hash=False)
 
     def __post_init__(self):
+        """ Calculate and initialize the progress percentage """
         total_time = self.total_time if type(self.total_time) == int else 1
         position = self.position if type(self.position) == int else 0
         object.__setattr__(self, 'progress', round(position * 100 / total_time, 1))
@@ -43,12 +44,15 @@ class PlaybackState:
                 self.content_identifier == other.content_identifier)
 
     def is_playing(self) -> bool:
+        """ Check if the device is playing """
         return self.device_state == const.DeviceState.Playing
 
     def is_idle(self) -> bool:
+        """ Check if the device is idle """
         return self.device_state == const.DeviceState.Idle
 
     def has_valid_metadata(self) -> bool:
+        """ Check if the metadata is valid """
         return (self.title or
                 self.series_name or
                 self.season_number or
@@ -56,13 +60,16 @@ class PlaybackState:
                 self.device_state == const.DeviceState.Idle)
 
     def get_title(self) -> str:
+        """ Get the title of the playback state """
         return self.series_name or self.title
 
     def has_tv_info(self) -> bool:
+        """ Check if the playback state has TV information """
         return self.season_number is not None and self.episode_number is not None
 
 
 class PlayStatusTracker(TVProtocol):
+    """ Track the current playback state of the Apple TV """
     curr_state: PlaybackState
     prev_state: PlaybackState
 
@@ -72,6 +79,7 @@ class PlayStatusTracker(TVProtocol):
         self.prev_state = PlaybackState(position=0, time=0)
 
     def playstatus_update(self, updater, playstatus: Playing):
+        """ Update the current playback state if the state is valid """
         new_state = self._make_state(updater, playstatus)
         if new_state.has_valid_metadata():
             self.prev_state = self.curr_state
@@ -81,6 +89,7 @@ class PlayStatusTracker(TVProtocol):
             self.print_warning(new_state)
 
     def _register_change_notification(self):
+        """ Register a change notification if the state has changed """
         if self._states_differ() or self._positions_differ():
             self.playstatus_changed()
         else:
@@ -99,7 +108,7 @@ class PlayStatusTracker(TVProtocol):
         intended to reduce meaningless playstatus updates some apps send
 
         :param sec_threshold: amount of seconds required before difference is registered
-        :return:
+        :return: True if position differs, False otherwise
         """
 
         curr_pos = self.curr_state.position or 0
@@ -111,6 +120,7 @@ class PlayStatusTracker(TVProtocol):
         return pos_diff - sec_threshold > 0
 
     def _make_state(self, updater, playstatus: Playing) -> PlaybackState:
+        """ Create a playback state from the playstatus """
         return PlaybackState(app=self.atv.metadata.app.identifier if self.atv.metadata.app else None,
                              metadata=updater.psm.playing.metadata,
                              device_state=playstatus.device_state,
@@ -130,9 +140,10 @@ class PlayStatusTracker(TVProtocol):
     def print_warning(message, failure: bool = False):
         color = '\033[93m' if not failure else '\033[91m'
         end = '\033[0m'
-        # print(f"{color}{message}{end}")
+        print(f"{color}{message}{end}")
 
-    async def request_now_playing_description(self):
+    async def request_now_playing_description(self) -> Optional[str]:
+        """ Request a description of the currently playing media """
         msg = create(ProtocolMessage.PLAYBACK_QUEUE_REQUEST_MESSAGE)
         req = msg.inner()
         req.location = 0
@@ -160,5 +171,6 @@ class PlayStatusTracker(TVProtocol):
             task.result()
         except asyncio.CancelledError:
             pass  # Task cancellation should not be logged as an error.
-        except Exception as e:
+        except Exception:
             logging.exception('Exception raised by task = %r', task)
+
