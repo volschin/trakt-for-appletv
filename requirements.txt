@@ -1,0 +1,7 @@
+pyatv
+pytz
+requests
+python-dateutil
+trakt.py
+PyYAML
+lxml
