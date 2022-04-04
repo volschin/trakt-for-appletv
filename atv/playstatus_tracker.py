@@ -73,8 +73,8 @@ class PlayStatusTracker(TVProtocol):
     curr_state: PlaybackState
     prev_state: PlaybackState
 
-    def __init__(self, atv, conf):
-        super().__init__(atv, conf)
+    def __init__(self):
+        super().__init__()
         self.curr_state = PlaybackState(position=0, time=0)
         self.prev_state = PlaybackState(position=0, time=0)
 
@@ -166,6 +166,7 @@ class PlayStatusTracker(TVProtocol):
 
     @staticmethod
     def _handle_task_result(task: asyncio.Task) -> None:
+        """ Logs any exceptions that occurred in the task """
         # noinspection PyBroadException
         try:
             task.result()
@@ -173,4 +174,3 @@ class PlayStatusTracker(TVProtocol):
             pass  # Task cancellation should not be logged as an error.
         except Exception:
             logging.exception('Exception raised by task = %r', task)
-

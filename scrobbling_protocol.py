@@ -6,7 +6,6 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import urlopen, Request
 
-import yaml
 from dateutil import parser
 from lxml import etree
 from io import BytesIO
@@ -18,8 +17,7 @@ from helpers.trakt_scrobbler import TraktScrobbler
 
 
 class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
-
-    def __init__(self, atv, conf):
+    def __init__(self):
         self.netflix_titles = {}
         self.itunes_titles = {}
         self.amazon_titles = {}
@@ -30,9 +28,8 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
                              'com.netflix.Netflix': self.handle_netflix,
                              'com.amazon.aiv.AIVApp': self.handle_amazon}
         self.pending_scrobble = None
-        self.settings = self._read_settings()
         self.init_trakt()
-        super(ScrobblingProtocol, self).__init__(atv, conf)
+        super(ScrobblingProtocol, self).__init__()
 
     async def cleanup(self) -> None:
         """ Cancels any pending scrobble and closes the trakt connection """
@@ -44,6 +41,7 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         await super(ScrobblingProtocol, self).cleanup()
 
     def playstatus_changed(self):
+        """ Called by the playstatus tracker when the play-state changes """
         if self.curr_state.app not in self.app_handlers and not self.curr_state.is_idle():
             return
 
@@ -271,8 +269,3 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         xml = etree.parse(BytesIO(data), etree.HTMLParser())
         info = json.loads(xml.xpath('//script')[0].text)
         return info['name']
-
-    @staticmethod
-    def _read_settings():
-        """ Reads the settings from the config file."""
-        return yaml.load(open('data/config.yml', 'r'), Loader=yaml.FullLoader)
