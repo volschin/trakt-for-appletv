@@ -78,6 +78,7 @@ class TVProtocol(PushListener, DeviceListener):
 
         if self.atv is not None:
             self.atv.push_updater.stop()
+            self.atv.listener = None
             remaining_tasks = self.atv.close()
             await asyncio.wait_for(asyncio.gather(*remaining_tasks), 10.0)
 
