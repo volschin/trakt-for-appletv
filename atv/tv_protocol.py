@@ -42,11 +42,14 @@ class TVProtocol(PushListener, DeviceListener):
         # Error in exception
 
     def connection_lost(self, exception: Exception) -> None:
+        self.print_warning(f'Connection lost: reconnecting...', failure=True)
         loop = asyncio.get_event_loop()
         asyncio.run_coroutine_threadsafe(self._startup(delay=10), loop)
 
     def connection_closed(self) -> None:
-        pass
+        self.print_warning(f'Connection closed: reconnecting...', failure=True)
+        loop = asyncio.get_event_loop()
+        asyncio.run_coroutine_threadsafe(self._startup(delay=10), loop)
 
     async def shutdown(self) -> None:
         """ Gracefully shutdown the Apple TV."""
