@@ -64,7 +64,9 @@ class TraktScrobbler:
 
             return r
 
-    async def stop_scrobbling(self):
+    async def stop_scrobbling(self, safe=False):
+        if safe and self.currently_scrobbling is None:
+            return
         current = await self.fetch_current_scrobble()
         self.currently_scrobbling = None
         if current:

@@ -37,7 +37,7 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
             self.pending_scrobble.cancel()
             self.pending_scrobble = None
 
-        await self.stop_scrobbling()
+        await self.stop_scrobbling(safe=True)
         await super(ScrobblingProtocol, self).cleanup()
 
     def playstatus_changed(self):
