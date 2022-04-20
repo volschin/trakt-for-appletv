@@ -234,10 +234,12 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
 
     async def handle_amazon(self) -> None:
         """ Start scrobbling Amazon."""
-        title, season, episode = await self.get_amazon_details(self.curr_state.content_identifier)
-        await self.start_scrobbling(show={'title': title},
-                                    episode={'season': season, 'number': episode},
-                                    progress=self.curr_state.progress)
+        amazon_settings = self.settings.get('amazon')
+        if amazon_settings and amazon_settings.get('enabled'):
+            title, season, episode = await self.get_amazon_details(self.curr_state.content_identifier)
+            await self.start_scrobbling(show={'title': title},
+                                        episode={'season': season, 'number': episode},
+                                        progress=self.curr_state.progress)
 
     async def get_amazon_details(self, content_identifier) -> Tuple[str, str, str]:
         """ Get the Amazon details for the given content identifier."""
