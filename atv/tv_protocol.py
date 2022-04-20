@@ -1,16 +1,14 @@
 # https://github.com/aio-libs/aiohttp/blob/936e682d1ab6c833b3e5f0cc3596882cb9cb2444/aiohttp/web_runner.py#L274
 import asyncio
-import logging
 import os
 import signal
-import warnings
+import sys
 from typing import cast, Optional, List
 
 import pyatv
 from pyatv.const import FeatureState, FeatureName
 
 from helpers.graceful_exit import GracefulExit
-from pyatv import connect
 from pyatv.core.relayer import Relayer
 from pyatv.interface import PushListener, DeviceListener, AppleTV, Playing
 from pyatv.protocols.mrp import MrpProtocol
@@ -45,7 +43,7 @@ class TVProtocol(PushListener, DeviceListener):
 
     def connection_lost(self, exception: Exception) -> None:
         loop = asyncio.get_event_loop()
-        asyncio.run_coroutine_threadsafe(connect(self.device, loop), loop)
+        asyncio.run_coroutine_threadsafe(self._startup(delay=10), loop)
 
     def connection_closed(self) -> None:
         pass
