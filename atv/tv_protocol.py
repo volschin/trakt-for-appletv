@@ -146,7 +146,7 @@ class TVProtocol(PushListener, DeviceListener):
     async def _scan_for_devices(self, atv_settings: dict) -> List[pyatv.interface.BaseConfig]:
         """ Scan for Apple TVs and return a list of devices."""
         async def _perform_scan(loop, identifier=None):
-            name = atv_settings.get('name') or "Apple TV's"
+            name = atv_settings.get('name') if identifier else "Apple TV's"
             print(f"Discovering {name} on network...")
             scan_result = await pyatv.scan(loop, identifier=identifier, protocol=pyatv.Protocol.AirPlay)
             return list(
