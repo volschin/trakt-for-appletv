@@ -7,7 +7,11 @@ from scrobbling_protocol import ScrobblingProtocol
 async def _play_handler():
     """The main task initializes the pyatv library and starts the scrobbling protocol."""
     listener = ScrobblingProtocol()
-    await listener.setup()
+    try:
+        await listener.setup()
+    except (GracefulExit, KeyboardInterrupt):  # pragma: no cover
+        await listener.shutdown()
+        return
 
     print("Listening for Apple TV events...")
 

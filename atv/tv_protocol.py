@@ -16,6 +16,8 @@ from pyatv.interface import PushListener, DeviceListener, AppleTV, Playing
 from pyatv.protocols.mrp import MrpProtocol
 import yaml
 
+from helpers.async_input import async_input
+
 
 def _raise_graceful_exit() -> None:
     raise GracefulExit()
@@ -48,6 +50,10 @@ class TVProtocol(PushListener, DeviceListener):
     def connection_closed(self) -> None:
         pass
 
+    async def shutdown(self) -> None:
+        """ Gracefully shutdown the Apple TV."""
+        await self.cleanup()
+
     async def setup(self) -> None:
         """ Add signal handlers to gracefully exit then connect to the Apple TV starting the push updater."""
         loop = asyncio.get_event_loop()
@@ -57,15 +63,7 @@ class TVProtocol(PushListener, DeviceListener):
         except NotImplementedError:  # pragma: no cover
             # add_signal_handler is not implemented on Windows
             pass
-
-        await self._connect()
-        self.atv.listener = self
-        self.atv.push_updater.listener = self
-        self.atv.push_updater.start()
-        self.protocol = cast(
-            MrpProtocol,
-            cast(Relayer, self.atv.remote_control).main_instance.protocol
-        )
+        await self._startup()
 
     async def cleanup(self) -> None:
         """ Cleanup the Apple TV connection and remove signal handlers."""
@@ -81,6 +79,23 @@ class TVProtocol(PushListener, DeviceListener):
             self.atv.push_updater.stop()
             remaining_tasks = self.atv.close()
             await asyncio.wait_for(asyncio.gather(*remaining_tasks), 10.0)
+
+    async def _startup(self, delay=None) -> None:
+        """ Connect to the Apple TV and start the push updater.
+
+        :param delay: Delay before connecting to the Apple TV.
+        """
+
+        if delay:
+            await asyncio.sleep(delay)
+        await self._connect()
+        self.atv.listener = self
+        self.atv.push_updater.listener = self
+        self.atv.push_updater.start()
+        self.protocol = cast(
+            MrpProtocol,
+            cast(Relayer, self.atv.remote_control).main_instance.protocol
+        )
 
     async def _connect(self) -> None:
         """ Connect to the Apple TV and store connection information."""
