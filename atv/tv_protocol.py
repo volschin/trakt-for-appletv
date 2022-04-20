@@ -155,23 +155,30 @@ class TVProtocol(PushListener, DeviceListener):
             return list(
                 filter(lambda x: x.device_info.operating_system == pyatv.const.OperatingSystem.TvOS, scan_result))
 
-        atv_id = atv_settings.get('id')
-        devices = await _perform_scan(asyncio.get_event_loop(), atv_id)
-        scan_for_all = True
-        if atv_id and not devices:
-            self.print_warning(f"Saved Apple TV with identifier {atv_id} could not be found")
-            # ask user if they wish to scan for all devices
-            # if no response is given after 10 seconds, repeat scan for saved device
-            scan_for_all = await self.prompt_new(10)
-            if not scan_for_all:
-                devices = await _perform_scan(asyncio.get_event_loop(), atv_id)
-            else:
-                devices = await _perform_scan(asyncio.get_event_loop())
-        if not devices:
-            message = "Saved Apple TV seems to be offline" if not scan_for_all else "No Apple TVs found on network"
-            self.print_warning(message, failure=True)
-            _raise_graceful_exit()
-        return devices
+        async def _fetch_devices():
+            atv_id = atv_settings.get('id')
+            devices = await _perform_scan(asyncio.get_event_loop(), atv_id)
+            scan_for_all = True
+            if atv_id and not devices:
+                self.print_warning(f"Saved Apple TV with identifier {atv_id} could not be found")
+                # ask user if they wish to scan for all devices
+                # if no response is given after 10 seconds, repeat scan for saved device
+                scan_for_all = await self.prompt_new(30)
+                if not scan_for_all:
+                    devices = await _perform_scan(asyncio.get_event_loop(), atv_id)
+                else:
+                    devices = await _perform_scan(asyncio.get_event_loop())
+            if not devices:
+                message = "Saved Apple TV seems to be offline" if not scan_for_all else "No Apple TVs found on network"
+                message += "... retrying press ctrl+c to exit"
+                self.print_warning(message, failure=True)
+            return devices
+
+        final_devices = await _fetch_devices()
+        while not final_devices:
+            final_devices = await _fetch_devices()
+
+        return final_devices
 
     async def prompt_new(self, timeout: int) -> bool:
         """ Ask the user if they wish to retry or search for a new Apple TV.
@@ -180,7 +187,7 @@ class TVProtocol(PushListener, DeviceListener):
         :return: True if the user wants to search for a new Apple TV, False otherwise
         """
 
-        prompt = f"Retrying saved Apple TV in {timeout} seconds, Enter 'n' or 'new' to scan for a new device: "
+        prompt = f"Retrying in {timeout} seconds, Enter 'n' or 'new' to scan for a new device: "
         timeout_msg = "Timed out, retrying saved Apple TV"
 
         answer = await self.safe_input(
@@ -190,7 +197,8 @@ class TVProtocol(PushListener, DeviceListener):
         )
         return answer.lower() == 'n' or answer.lower() == 'new'
 
-    async def safe_input(self, prompt: str, timeout_msg: str = 'Timeout!', timeout: int = sys.maxsize) -> str:
+    @staticmethod
+    async def safe_input(prompt: str, timeout_msg: str = 'Timeout!', timeout: int = sys.maxsize) -> str:
         """ Asyncio safe input function. Asks the user for input and returns the answer.
 
         :param prompt: Prompt to display to the user
@@ -203,10 +211,6 @@ class TVProtocol(PushListener, DeviceListener):
             answer = await async_input(prompt, timeout)
         except asyncio.TimeoutError:
             print(timeout_msg)
-            return ""
-        except KeyboardInterrupt:
-            self.print_warning("Cancelled", failure=True)
-            _raise_graceful_exit()
             return ""
         return answer
 
