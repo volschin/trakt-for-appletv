@@ -47,7 +47,7 @@ def main():
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
         asyncio.set_event_loop(None)
-        print("Done")
+        print("\nShutdown complete.")
 
 
 if __name__ == "__main__":

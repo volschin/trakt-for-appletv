@@ -52,7 +52,7 @@ class TVProtocol(PushListener, DeviceListener):
         asyncio.run_coroutine_threadsafe(self._startup(delay=10), loop)
 
     async def shutdown(self) -> None:
-        """ Gracefully shutdown the Apple TV."""
+        """ Gracefully shutdown the Apple TV before connection is complete, ignores subclasses."""
         await self.cleanup()
 
     async def setup(self) -> None:
