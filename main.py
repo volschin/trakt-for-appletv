@@ -10,8 +10,8 @@ async def _play_handler():
     try:
         await listener.setup()
     except (GracefulExit, KeyboardInterrupt):  # pragma: no cover
+        print("\nSetup cancelled, shutting down...")
         await listener.shutdown()
-        return
 
     print("Listening for Apple TV events...")
 
@@ -27,6 +27,7 @@ async def _play_handler():
         while True:
             await asyncio.sleep(delay)
     finally:
+        print("\nShutdown requested, cleaning up...")
         await listener.cleanup()
 
 
@@ -47,7 +48,7 @@ def main():
         loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
         asyncio.set_event_loop(None)
-        print("\nShutdown complete.")
+        print("Shutdown complete.")
 
 
 if __name__ == "__main__":
