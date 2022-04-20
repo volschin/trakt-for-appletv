@@ -86,14 +86,14 @@ class PlayStatusTracker(TVProtocol):
             self.curr_state = new_state
             self._register_change_notification()
         else:
-            self.print_warning(new_state)
+            self.print_warning(f"Ignoring Invalid State {new_state}")
 
     def _register_change_notification(self):
         """ Register a change notification if the state has changed """
         if self._states_differ() or self._positions_differ():
             self.playstatus_changed()
         else:
-            self.print_warning(self.curr_state, failure=True)
+            self.print_warning(f"Ignoring Redundant State {self.curr_state}")
 
     def _states_differ(self) -> bool:
         """Compares equality of previous and current playback states ignoring position, time, and metadata properties.
