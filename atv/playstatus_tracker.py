@@ -136,12 +136,6 @@ class PlayStatusTracker(TVProtocol):
     def playstatus_changed(self):
         raise NotImplementedError
 
-    @staticmethod
-    def print_warning(message, failure: bool = False):
-        color = '\033[93m' if not failure else '\033[91m'
-        end = '\033[0m'
-        print(f"{color}{message}{end}")
-
     async def request_now_playing_description(self) -> Optional[str]:
         """ Request a description of the currently playing media """
         msg = create(ProtocolMessage.PLAYBACK_QUEUE_REQUEST_MESSAGE)

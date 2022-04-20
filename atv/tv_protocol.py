@@ -117,7 +117,7 @@ class TVProtocol(PushListener, DeviceListener):
         print(f"Connecting to {device.address}")
         self.atv = await pyatv.connect(device, loop)
         if not self.atv.features.in_state(FeatureState.Available, FeatureName.PushUpdates):
-            logging.error("Push updates are not supported (no protocol supports it)")
+            self.print_warning("Push updates are not supported (no protocol supports it)", failure=True)
             _raise_graceful_exit()
         self.device = device
 
@@ -137,7 +137,7 @@ class TVProtocol(PushListener, DeviceListener):
                 with open(self._pairing_file, "w") as f:
                     f.write(pairing.service.credentials)
             else:
-                logging.error("Pairing failed")
+                self.print_warning("Pairing failed", failure=True)
                 _raise_graceful_exit()
         else:
             with open(self._pairing_file, "r") as f:
@@ -221,3 +221,10 @@ class TVProtocol(PushListener, DeviceListener):
     def _read_settings(self) -> dict:
         """ Reads the settings from the config file."""
         return yaml.load(open(self._config_file, 'r'), Loader=yaml.FullLoader) or {}
+
+    @staticmethod
+    def print_warning(message: str, failure: bool = False):
+        color = '\033[93m' if not failure else '\033[91m'
+        end = '\033[0m'
+        begin = 'WARNING: ' if not failure else 'ERROR: '
+        print(f"{color}{begin}{message}{end}")
