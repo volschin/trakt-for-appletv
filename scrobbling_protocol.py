@@ -42,20 +42,31 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
 
     def playstatus_changed(self):
         """ Called by the playstatus tracker when the play-state changes """
+
+        # handle apps in app_handlers and any idle states
         if self.curr_state.app not in self.app_handlers and not self.curr_state.is_idle():
-            return
+            # if we're currently scrobbling, we should handle any pause states
+            if self.curr_state.is_playing() or not self.currently_scrobbling:
+                self.print_ignore(f"Ignoring Untracked {self.curr_state}", handle=True)
+                return False
+            self.print_info("Handling untracked pause to stop currently scrobbling")
 
         self.handle_state_change()
 
     def handle_state_change(self):
         """ Cancels any pending scrobble and creates a new one """
         if self.pending_scrobble:
+            # tasks sleep for 1 second before handling a state change
+            # this is to allow cancelling rapid state changes (like when skipping)
+            # also, apps can send multiple state changes in a row where the last one is the one we want
+            self.print_ignore(f"Cancelling pending scrobble {self.prev_state}", handle=True)
             self.pending_scrobble.cancel()
             self.pending_scrobble = None
 
         self.pending_scrobble = asyncio.create_task(
             self.post_trakt_update()
         )
+        # add a done callback to the task so task errors are logged
         self.pending_scrobble.add_done_callback(self._handle_task_result)
 
     async def post_trakt_update(self, after=1) -> None:
@@ -63,14 +74,14 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
 
         :param after: The time to wait before handling a state change"""
         await asyncio.sleep(after)
-        print(self.curr_state)
+        handler = self.app_handlers.get(self.curr_state.app)
 
-        if self.curr_state.is_playing():
-            handler = self.app_handlers[self.curr_state.app]
-            if handler:
-                await handler()
+        if self.curr_state.is_playing() and handler:
+            self.print_info(f"Start for {self.curr_state}")
+            await handler()
         else:
             if self.currently_scrobbling:
+                self.print_info(f"Stop for {self.curr_state}")
                 await self.stop_scrobbling()
 
         self.pending_scrobble = None

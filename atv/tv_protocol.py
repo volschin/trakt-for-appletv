@@ -101,7 +101,7 @@ class TVProtocol(PushListener, DeviceListener):
         settings_atv = self.settings.get('apple_tv') or {}
         atv_id = settings_atv.get('id')
         devices = await self._scan_for_devices(settings_atv)
-        device = self._choose_device(devices)
+        device = await self._choose_device(devices)
 
         if atv_id != device.identifier:
             self.settings['apple_tv'] = {}
@@ -128,7 +128,7 @@ class TVProtocol(PushListener, DeviceListener):
             pairing = await pyatv.pair(device, pyatv.Protocol.AirPlay, loop)
             await pairing.begin()
 
-            code = input("Enter code displayed by Apple TV: ")
+            code = await self.safe_input("Enter code displayed by Apple TV: ")
             pairing.pin(code)
 
             await pairing.finish()
@@ -207,15 +207,14 @@ class TVProtocol(PushListener, DeviceListener):
             return ""
         return answer
 
-    @staticmethod
-    def _choose_device(devices: list) -> pyatv.interface.BaseConfig:
+    async def _choose_device(self, devices: list) -> pyatv.interface.BaseConfig:
         """ Choose a device from a list of devices."""
         if len(devices) == 1:
             return devices[0]
         print("Found multiple Apple TVs, please choose one:")
         for i, device in enumerate(devices):
             print(f"{i + 1}: {device.name}")
-        choice = int(input("Enter number: "))
+        choice = int(await self.safe_input("Enter number: "))
         return devices[choice - 1]
 
     def _read_settings(self) -> dict:

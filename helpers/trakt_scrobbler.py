@@ -49,6 +49,7 @@ class TraktScrobbler:
             Trakt['scrobble'].start(
                 **kwargs
             )
+            self.print_info(f'Started {kwargs}', scrobble=True)
         except Exception as e:
             print(e)
 
@@ -75,10 +76,12 @@ class TraktScrobbler:
                 Trakt['scrobble'].stop(
                     **current
                 )
+                self.print_info(f'Stopped {current}', scrobble=True)
             elif progress:
                 Trakt['scrobble'].pause(
                     **current
                 )
+                self.print_info(f'Paused {current}', scrobble=True)
 
     async def fetch_current_scrobble(self):
         settings = Trakt['users/settings'].get()
@@ -99,3 +102,10 @@ class TraktScrobbler:
             'episode': data.get('episode'),
             'progress': (now-started_at).seconds / (expires_at-started_at).seconds * 100
         }
+
+    @staticmethod
+    def print_info(message: str, scrobble: bool = False):
+        color = '\033[96m' if not scrobble else '\033[92m'
+        end = '\033[0m'
+        begin = 'HANDLE: ' if not scrobble else 'SCROBBLE: '
+        print(f"{color}{begin}{message}{end}")

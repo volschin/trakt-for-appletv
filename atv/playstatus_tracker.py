@@ -51,6 +51,10 @@ class PlaybackState:
         """ Check if the device is idle """
         return self.device_state == const.DeviceState.Idle
 
+    def is_paused(self) -> bool:
+        """ Check if the playback state is paused """
+        return self.device_state == const.DeviceState.Paused
+
     def has_valid_metadata(self) -> bool:
         """ Check if the metadata is valid """
         return (self.title or
@@ -86,14 +90,14 @@ class PlayStatusTracker(TVProtocol):
             self.curr_state = new_state
             self._register_change_notification()
         else:
-            self.print_warning(f"Ignoring Invalid State {new_state}")
+            self.print_ignore(f"Not Changing for Invalid State {new_state}")
 
     def _register_change_notification(self):
         """ Register a change notification if the state has changed """
         if self._states_differ() or self._positions_differ():
             self.playstatus_changed()
         else:
-            self.print_warning(f"Ignoring Redundant State {self.curr_state}")
+            self.print_ignore(f"Not Registering Redundant Change {self.curr_state}")
 
     def _states_differ(self) -> bool:
         """Compares equality of previous and current playback states ignoring position, time, and metadata properties.
@@ -168,3 +172,10 @@ class PlayStatusTracker(TVProtocol):
             pass  # Task cancellation should not be logged as an error.
         except Exception:
             logging.exception('Exception raised by task = %r', task)
+
+    @staticmethod
+    def print_ignore(message: str, handle: bool = False):
+        color = '\033[93m'
+        end = '\033[0m'
+        begin = 'HANDLE: ' if handle else 'STATE: '
+        print(f"{color}{begin}{message}{end}")
