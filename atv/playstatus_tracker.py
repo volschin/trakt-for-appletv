@@ -173,8 +173,9 @@ class PlayStatusTracker(TVProtocol):
         except Exception:
             logging.exception('Exception raised by task = %r', task)
 
-    @staticmethod
-    def print_ignore(message: str, handle: bool = False):
+    def print_ignore(self, message: str, handle: bool = False):
+        if self.settings['logging']['level'] != 'debug':
+            return
         color = '\033[93m'
         end = '\033[0m'
         begin = 'HANDLE: ' if handle else 'STATE: '
