@@ -13,7 +13,8 @@ async def async_input(prompt: str, timeout: int) -> str:
     """
     loop = asyncio.get_event_loop()
     queue = asyncio.Queue()
-    print(prompt, end="")
+    sys.stdout.write(prompt)
+    sys.stdout.flush()
 
     def response_handler():
         """ Handle response from user. """
