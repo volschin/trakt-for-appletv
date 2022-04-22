@@ -15,7 +15,11 @@ class AsyncLogger:
 
     async def setup(self):
         """ Setup asyncio. """
-        await self.connect_stdin_stdout()
+        try:
+            await self.connect_stdin_stdout()
+        except ValueError:
+            print("Headles Mode Enabled")
+            self.headless = True
 
     async def connect_stdin_stdout(self):
         """ Connect stdin and stdout to asyncio. """
@@ -43,6 +47,9 @@ class AsyncLogger:
         :param msg: Message to print.
         :param end: End character.
         """
+        if self.headless:
+            print(msg, end=end)
+            return
         msg = msg + end
         self.writer.write(msg.encode('utf-8'))
         await self.writer.drain()
@@ -59,6 +66,8 @@ class AsyncLogger:
         :return: Input from user.
         """
         await self.print(prompt, end='')
+        if self.headless:
+            return ''
         try:
             return await asyncio.wait_for(self.readline(), timeout_secs)
         except asyncio.TimeoutError:
