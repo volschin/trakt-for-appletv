@@ -7,4 +7,4 @@ apple_tv:
   name: null
 logging:
   level: info
-  file: null{}
+  file: null
