@@ -1,5 +1,6 @@
 import os
 import pickle
+from abc import ABC
 from datetime import datetime
 from json import JSONDecodeError
 
@@ -9,16 +10,13 @@ from dateutil.parser import parse
 from requests.auth import HTTPBasicAuth
 from trakt import Trakt
 
+from atv.playstatus_tracker import PlayStatusTracker
 
-class TraktScrobbler:
+
+class TraktScrobbler(PlayStatusTracker, ABC):
 
     def __init__(self):
-        # TODO: fix this init not being called
-        self.watched_percent = 90
-        self.currently_scrobbling = None
-        self.auth_file = None
-
-    def init_trakt(self):
+        super().__init__()
         self.watched_percent = 90
         self.currently_scrobbling = None
         self.auth_file = 'data/trakt.auth'
@@ -49,9 +47,9 @@ class TraktScrobbler:
             Trakt['scrobble'].start(
                 **kwargs
             )
-            self.print_info(f'Started {kwargs}', scrobble=True)
+            await self.print_info(f'Started {kwargs}', prefix='TRAKT', success=True)
         except Exception as e:
-            print(e)
+            await self.print_warning(f'Failed to start scrobble {e}')
 
     class BearerAuth(requests.auth.AuthBase):
         def __init__(self, token):
@@ -76,12 +74,12 @@ class TraktScrobbler:
                 Trakt['scrobble'].stop(
                     **current
                 )
-                self.print_info(f'Stopped {current}', scrobble=True)
+                await self.print_info(f'Stopped {current}', prefix='TRAKT', success=True)
             elif progress:
                 Trakt['scrobble'].pause(
                     **current
                 )
-                self.print_info(f'Paused {current}', scrobble=True)
+                await self.print_info(f'Paused {current}', prefix='TRAKT', success=True)
 
     async def fetch_current_scrobble(self):
         settings = Trakt['users/settings'].get()
@@ -91,7 +89,8 @@ class TraktScrobbler:
                 auth=self.BearerAuth(Trakt.configuration.defaults.data['oauth.token'])
             ).json()
         except JSONDecodeError:
-            return None
+            await self.print_warning(f'Failed to fetch current scrobble')
+            return self.currently_scrobbling
 
         started_at = parse(data['started_at'])
         expires_at = parse(data['expires_at'])
@@ -102,10 +101,3 @@ class TraktScrobbler:
             'episode': data.get('episode'),
             'progress': (now-started_at).seconds / (expires_at-started_at).seconds * 100
         }
-
-    @staticmethod
-    def print_info(message: str, scrobble: bool = False):
-        color = '\033[96m' if not scrobble else '\033[92m'
-        end = '\033[0m'
-        begin = 'HANDLE: ' if not scrobble else 'SCROBBLE: '
-        print(f"{color}{begin}{message}{end}")

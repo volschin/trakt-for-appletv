@@ -1,14 +1,16 @@
 import asyncio
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional
+
+from google.protobuf.json_format import MessageToDict
 from pyatv import const
 from pyatv.interface import Playing
-from google.protobuf.json_format import MessageToDict
 from pyatv.protocols.mrp.messages import create
 from pyatv.protocols.mrp.protobuf import ContentItemMetadata, ProtocolMessage
+
 from atv.tv_protocol import TVProtocol
-import time
 
 
 @dataclass(frozen=True)
@@ -90,14 +92,16 @@ class PlayStatusTracker(TVProtocol):
             self.curr_state = new_state
             self._register_change_notification()
         else:
-            self.print_ignore(f"Not Changing for Invalid State {new_state}")
+            task = self.print_debug(f"Not Changing for Invalid State {new_state}", prefix="STATUS")
+            asyncio.get_event_loop().create_task(task)
 
     def _register_change_notification(self):
         """ Register a change notification if the state has changed """
         if self._states_differ() or self._positions_differ():
             self.playstatus_changed()
         else:
-            self.print_ignore(f"Not Registering Redundant Change {self.curr_state}")
+            task = self.print_debug(f"Not Registering Redundant Change {self.curr_state}", prefix="STATUS")
+            asyncio.get_event_loop().create_task(task)
 
     def _states_differ(self) -> bool:
         """Compares equality of previous and current playback states ignoring position, time, and metadata properties.
@@ -159,7 +163,6 @@ class PlayStatusTracker(TVProtocol):
         msg = create(msg)
         response = await self.protocol.send_and_receive(msg)
         state_dict: dict = MessageToDict(response)
-        print(state_dict)
         return state_dict
 
     @staticmethod
@@ -172,11 +175,3 @@ class PlayStatusTracker(TVProtocol):
             pass  # Task cancellation should not be logged as an error.
         except Exception:
             logging.exception('Exception raised by task = %r', task)
-
-    def print_ignore(self, message: str, handle: bool = False):
-        if self.settings['logging']['level'] != 'debug':
-            return
-        color = '\033[93m'
-        end = '\033[0m'
-        begin = 'HANDLE: ' if handle else 'STATE: '
-        print(f"{color}{begin}{message}{end}")

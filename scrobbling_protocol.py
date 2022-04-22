@@ -12,11 +12,10 @@ from io import BytesIO
 import json
 import requests
 
-from atv.playstatus_tracker import PlayStatusTracker
-from helpers.trakt_scrobbler import TraktScrobbler
+from atv.trakt_scrobbler import TraktScrobbler
 
 
-class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
+class ScrobblingProtocol(TraktScrobbler):
     def __init__(self):
         self.netflix_titles = {}
         self.itunes_titles = {}
@@ -28,7 +27,7 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
                              'com.netflix.Netflix': self.handle_netflix,
                              'com.amazon.aiv.AIVApp': self.handle_amazon}
         self.pending_scrobble = None
-        self.init_trakt()
+        # self.init_trakt()
         super(ScrobblingProtocol, self).__init__()
 
     async def cleanup(self) -> None:
@@ -47,9 +46,11 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         if self.curr_state.app not in self.app_handlers and not self.curr_state.is_idle():
             # if we're currently scrobbling, we should handle any pause states
             if self.curr_state.is_playing() or not self.currently_scrobbling:
-                self.print_ignore(f"Ignoring Untracked {self.curr_state}", handle=True)
+                task = self.print_debug(f"Ignoring Untracked {self.curr_state}", prefix="SCROBBLER")
+                asyncio.get_event_loop().create_task(task)
                 return False
-            self.print_info("Handling untracked pause to stop currently scrobbling")
+            task = self.print_info("Handling untracked pause to stop currently scrobbling")
+            asyncio.get_event_loop().create_task(task)
 
         self.handle_state_change()
 
@@ -59,7 +60,8 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
             # tasks sleep for 1 second before handling a state change
             # this is to allow cancelling rapid state changes (like when skipping)
             # also, apps can send multiple state changes in a row where the last one is the one we want
-            self.print_ignore(f"Cancelling pending scrobble {self.prev_state}", handle=True)
+            task = self.print_debug(f"Pending scrobble was replaced {self.prev_state}", prefix="SCROBBLER")
+            asyncio.get_event_loop().create_task(task)
             self.pending_scrobble.cancel()
             self.pending_scrobble = None
 
@@ -77,11 +79,11 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         handler = self.app_handlers.get(self.curr_state.app)
 
         if self.curr_state.is_playing() and handler:
-            self.print_info(f"Start for {self.curr_state}")
+            await self.print_info(f"Start for {self.curr_state}", prefix="SCROBBLER")
             await handler()
         else:
             if self.currently_scrobbling:
-                self.print_info(f"Stop for {self.curr_state}")
+                await self.print_info(f"Stop for {self.curr_state}", prefix="SCROBBLER")
                 await self.stop_scrobbling()
 
         self.pending_scrobble = None
@@ -94,17 +96,17 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         else:
             info = await self.get_itunes_title(self.curr_state.content_identifier)
             if info is None:
-                print("OOPS")
+                await self.print("OOPS")
                 return
             if type(info) is dict and 'kind' in info:
                 movie = {'title': dict(info)['trackName'],
                          'year': parser.parse(dict(info)['releaseDate']).year}
-                print(f"Playing iTunes Movie: {movie['title']}")
+                await self.print(f"Playing iTunes Movie: {movie['title']}")
                 await self.start_scrobbling(movie=movie, progress=self.curr_state.progress)
                 return
 
             season_number, episode_number = info
-        print(f"Playing iTunes Show: {self.curr_state.get_title()} S{season_number}E{episode_number}")
+        await self.print(f"Playing iTunes Show: {self.curr_state.get_title()} S{season_number}E{episode_number}")
         await self.start_scrobbling(show={'title': self.curr_state.get_title()},
                                     episode={'season': season_number, 'number': episode_number},
                                     progress=self.curr_state.progress)
@@ -118,11 +120,11 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         try:
             result = requests.get(f'https://itunes.apple.com/lookup?id=' + content_identifier).json()
         except JSONDecodeError:
-            self.print_warning("JSON ERROR")
+            await self.print_warning("JSON ERROR")
             result = {'resultCount': 0}
 
         if result.get('resultCount') == 0 or 'errorMessage' in result:
-            print('no result')
+            await self.print('no result')
             result = await self.get_apple_tv_plus_info(self.curr_state.get_title())
             if not result:
                 return None
@@ -203,7 +205,7 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
         else:
             movie['title'] = match.group(1)
             movie['year'] = match.group(2)
-        print(f"Playing iTunes Movie: {movie['title']}")
+        await self.print(f"Playing iTunes Movie: {movie['title']}")
         await self.start_scrobbling(movie=movie, progress=self.curr_state.progress)
 
     async def handle_netflix(self) -> None:
@@ -220,16 +222,16 @@ class ScrobblingProtocol(PlayStatusTracker, TraktScrobbler):
                 else:
                     title = await self.get_netflix_title_from_description(match.group(1), match.group(3))
                     if not title:
-                        print("Error: Netflix title not found")
+                        await self.print("Error: Netflix title not found")
                         return
                 self.netflix_titles[key] = title
             if title:
-                print(f"Playing Netflix Show: {title} S{match.group(1)}E{match.group(2)}")
+                await self.print(f"Playing Netflix Show: {title} S{match.group(1)}E{match.group(2)}")
                 await self.start_scrobbling(show={'title': title},
                                             episode={'season': match.group(1), 'number': match.group(2)},
                                             progress=self.curr_state.progress)
         else:
-            print("Netflix Movie:", self.curr_state.title)
+            await self.print("Netflix Movie:", self.curr_state.title)
             await self.start_scrobbling(movie={'title': self.curr_state.title}, progress=self.curr_state.progress)
 
     async def handle_amazon(self) -> None:

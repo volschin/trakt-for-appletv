@@ -9,11 +9,11 @@ async def _play_handler():
     listener = ScrobblingProtocol()
     try:
         await listener.setup()
-    except (GracefulExit, KeyboardInterrupt):  # pragma: no cover
-        print("\nSetup cancelled, shutting down...")
-        await listener.shutdown()
-
-    print("Listening for Apple TV events...")
+    finally:  # pragma: no cover
+        if not listener.is_setup:
+            await listener.print("\nSetup cancelled, shutting down...")
+            await listener.shutdown()
+            return 1
 
     # sleep forever by 1 hour intervals,
     # on Windows before Python 3.8 wake up every 1 second to handle
@@ -27,7 +27,7 @@ async def _play_handler():
         while True:
             await asyncio.sleep(delay)
     finally:
-        print("\nShutdown requested, cleaning up...")
+        await listener.print("\nShutdown requested, cleaning up...")
         await listener.cleanup()
 
 

@@ -2,7 +2,6 @@
 import asyncio
 import os
 import signal
-import sys
 from typing import cast, Optional, List
 
 import pyatv
@@ -14,14 +13,14 @@ from pyatv.interface import PushListener, DeviceListener, AppleTV, Playing
 from pyatv.protocols.mrp import MrpProtocol
 import yaml
 
-from helpers.async_input import async_input
+from helpers.async_logger import AsyncLogger
 
 
 def _raise_graceful_exit() -> None:
     raise GracefulExit()
 
 
-class TVProtocol(PushListener, DeviceListener):
+class TVProtocol(AsyncLogger, PushListener, DeviceListener):
     atv: Optional[AppleTV]
 
     def __init__(self):
@@ -32,6 +31,8 @@ class TVProtocol(PushListener, DeviceListener):
         self._pairing_file = 'data/pairing.state'
         self.settings = self._read_settings()
         self.protocol = None
+        self.is_setup = False
+        super(TVProtocol, self).__init__(self.settings)
 
     def playstatus_update(self, updater, playstatus: Playing):
         title = playstatus.title if playstatus.series_name is None else playstatus.series_name
@@ -42,14 +43,16 @@ class TVProtocol(PushListener, DeviceListener):
         # Error in exception
 
     def connection_lost(self, exception: Exception) -> None:
-        self.print_warning(f'Connection lost: reconnecting...', failure=True)
+        """ Called when the connection to the Apple TV is lost. """
         loop = asyncio.get_event_loop()
-        asyncio.run_coroutine_threadsafe(self._startup(delay=10), loop)
+        loop.create_task(self.print_warning(f'Connection lost: reconnecting...', failure=True))
+        asyncio.run_coroutine_threadsafe(self._startup(), loop)
 
     def connection_closed(self) -> None:
-        self.print_warning(f'Connection closed: reconnecting...', failure=True)
+        """ Called when the connection to the Apple TV is closed. """
         loop = asyncio.get_event_loop()
-        asyncio.run_coroutine_threadsafe(self._startup(delay=10), loop)
+        loop.create_task(self.print_warning(f'Connection closed: reconnecting...', failure=True))
+        asyncio.run_coroutine_threadsafe(self._startup(), loop)
 
     async def shutdown(self) -> None:
         """ Gracefully shutdown the Apple TV before connection is complete, ignores subclasses."""
@@ -57,6 +60,7 @@ class TVProtocol(PushListener, DeviceListener):
 
     async def setup(self) -> None:
         """ Add signal handlers to gracefully exit then connect to the Apple TV starting the push updater."""
+        await super(TVProtocol, self).setup()
         loop = asyncio.get_event_loop()
         try:
             loop.add_signal_handler(signal.SIGINT, _raise_graceful_exit)
@@ -65,6 +69,7 @@ class TVProtocol(PushListener, DeviceListener):
             # add_signal_handler is not implemented on Windows
             pass
         await self._startup()
+        self.is_setup = True
 
     async def cleanup(self) -> None:
         """ Cleanup the Apple TV connection and remove signal handlers."""
@@ -98,6 +103,7 @@ class TVProtocol(PushListener, DeviceListener):
             MrpProtocol,
             cast(Relayer, self.atv.remote_control).main_instance.protocol
         )
+        await self.print('Listening for Apple TV events...')
 
     async def _connect(self) -> None:
         """ Connect to the Apple TV and store connection information."""
@@ -118,10 +124,10 @@ class TVProtocol(PushListener, DeviceListener):
                 pass
 
         await self._pair_device(device)
-        print(f"Connecting to {device.address}")
+        await self.print(f"Connecting to {device.address}")
         self.atv = await pyatv.connect(device, loop)
         if not self.atv.features.in_state(FeatureState.Available, FeatureName.PushUpdates):
-            self.print_warning("Push updates are not supported (no protocol supports it)", failure=True)
+            await self.print_warning("Push updates are not supported (no protocol supports it)", failure=True)
             _raise_graceful_exit()
         self.device = device
 
@@ -132,7 +138,7 @@ class TVProtocol(PushListener, DeviceListener):
             pairing = await pyatv.pair(device, pyatv.Protocol.AirPlay, loop)
             await pairing.begin()
 
-            code = await self.safe_input("Enter code displayed by Apple TV: ")
+            code = await self.input("Enter code displayed by Apple TV: ")
             pairing.pin(code)
 
             await pairing.finish()
@@ -141,7 +147,7 @@ class TVProtocol(PushListener, DeviceListener):
                 with open(self._pairing_file, "w") as f:
                     f.write(pairing.service.credentials)
             else:
-                self.print_warning("Pairing failed", failure=True)
+                await self.print_warning("Pairing failed", failure=True)
                 _raise_graceful_exit()
         else:
             with open(self._pairing_file, "r") as f:
@@ -151,7 +157,7 @@ class TVProtocol(PushListener, DeviceListener):
         """ Scan for Apple TVs and return a list of devices."""
         async def _perform_scan(loop, identifier=None):
             name = atv_settings.get('name') if identifier else "Apple TV's"
-            print(f"Discovering {name} on network...")
+            await self.print(f"Discovering {name} on network...")
             scan_result = await pyatv.scan(loop, identifier=identifier, protocol=pyatv.Protocol.AirPlay)
             return list(
                 filter(lambda x: x.device_info.operating_system == pyatv.const.OperatingSystem.TvOS, scan_result))
@@ -161,7 +167,7 @@ class TVProtocol(PushListener, DeviceListener):
             devices = await _perform_scan(asyncio.get_event_loop(), atv_id)
             scan_for_all = True
             if atv_id and not devices:
-                self.print_warning(f"Saved Apple TV with identifier {atv_id} could not be found")
+                await self.print_warning(f"Saved Apple TV with identifier {atv_id} could not be found")
                 # ask user if they wish to scan for all devices
                 # if no response is given after 10 seconds, repeat scan for saved device
                 scan_for_all = await self.prompt_new(30)
@@ -172,7 +178,7 @@ class TVProtocol(PushListener, DeviceListener):
             if not devices:
                 message = "Saved Apple TV seems to be offline" if not scan_for_all else "No Apple TVs found on network"
                 message += "... retrying press ctrl+c to exit"
-                self.print_warning(message, failure=True)
+                await self.print_warning(message, failure=True)
             return devices
 
         final_devices = await _fetch_devices()
@@ -191,47 +197,23 @@ class TVProtocol(PushListener, DeviceListener):
         prompt = f"Retrying in {timeout} seconds, Enter 'n' or 'new' to scan for a new device: "
         timeout_msg = "Timed out, retrying saved Apple TV"
 
-        answer = await self.safe_input(
+        answer = await self.input(
             prompt=prompt,
-            timeout=timeout,
+            timeout_secs=timeout,
             timeout_msg=timeout_msg
         )
         return answer.lower() == 'n' or answer.lower() == 'new'
-
-    @staticmethod
-    async def safe_input(prompt: str, timeout_msg: str = 'Timeout!', timeout: int = sys.maxsize) -> str:
-        """ Asyncio safe input function. Asks the user for input and returns the answer.
-
-        :param prompt: Prompt to display to the user
-        :param timeout_msg: Message to display if the user times out
-        :param timeout: Timeout in seconds
-        :return: User input
-        """
-
-        try:
-            answer = await async_input(prompt, timeout)
-        except asyncio.TimeoutError:
-            print(timeout_msg)
-            return ""
-        return answer
 
     async def _choose_device(self, devices: list) -> pyatv.interface.BaseConfig:
         """ Choose a device from a list of devices."""
         if len(devices) == 1:
             return devices[0]
-        print("Found multiple Apple TVs, please choose one:")
+        await self.print("Found multiple Apple TVs, please choose one:")
         for i, device in enumerate(devices):
-            print(f"{i + 1}: {device.name}")
-        choice = int(await self.safe_input("Enter number: "))
+            await self.print(f"{i + 1}: {device.name}")
+        choice = int(await self.input("Enter number: "))
         return devices[choice - 1]
 
     def _read_settings(self) -> dict:
         """ Reads the settings from the config file."""
         return yaml.load(open(self._config_file, 'r'), Loader=yaml.FullLoader) or {}
-
-    @staticmethod
-    def print_warning(message: str, failure: bool = False):
-        color = '\033[93m' if not failure else '\033[91m'
-        end = '\033[0m'
-        begin = 'WARNING: ' if not failure else 'ERROR: '
-        print(f"{color}{begin}{message}{end}")
