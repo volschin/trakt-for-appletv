@@ -1,13 +1,9 @@
 import os
 import pickle
 from abc import ABC
-from datetime import datetime
-from json import JSONDecodeError
+from datetime import datetime, timedelta
 
 import pytz as pytz
-import requests
-from dateutil.parser import parse
-from requests.auth import HTTPBasicAuth
 from trakt import Trakt
 
 from atv.playstatus_tracker import PlayStatusTracker
@@ -16,7 +12,6 @@ from atv.playstatus_tracker import PlayStatusTracker
 class TraktScrobbler(PlayStatusTracker, ABC):
 
     def __init__(self):
-        super().__init__()
         self.watched_percent = 90
         self.currently_scrobbling = None
         self.auth_file = 'data/trakt.auth'
@@ -27,6 +22,7 @@ class TraktScrobbler(PlayStatusTracker, ABC):
         Trakt.configuration.defaults.http(retry=True)
         Trakt.on('oauth.token_refreshed', self.on_trakt_token_refreshed)
         self.authenticate_trakt()
+        super().__init__()
 
     def authenticate_trakt(self):
         if os.path.exists(self.auth_file):
@@ -42,7 +38,11 @@ class TraktScrobbler(PlayStatusTracker, ABC):
         pickle.dump(response, open(self.auth_file, 'wb'))
 
     async def start_scrobbling(self, **kwargs):
-        self.currently_scrobbling = kwargs
+        now = datetime.now(pytz.utc)
+        secs_left = self.curr_state.total_time - self.curr_state.position
+        started_at = now - timedelta(seconds=self.curr_state.position)
+        expires_at = now + timedelta(seconds=secs_left)
+        self.currently_scrobbling = kwargs, started_at, expires_at
         try:
             Trakt['scrobble'].start(
                 **kwargs
@@ -51,22 +51,11 @@ class TraktScrobbler(PlayStatusTracker, ABC):
         except Exception as e:
             await self.print_warning(f'Failed to start scrobble {e}')
 
-    class BearerAuth(requests.auth.AuthBase):
-        def __init__(self, token):
-            self.token = token
-
-        def __call__(self, r):
-            r.headers['Content-Type'] = 'application/json'
-            r.headers["Authorization"] = "Bearer " + self.token
-            r.headers['trakt-api-version'] = '2'
-            r.headers['trakt-api-key'] = Trakt.configuration.defaults.data['client.id']
-
-            return r
-
     async def stop_scrobbling(self, safe=False):
-        if safe and self.currently_scrobbling is None:
+        if self.currently_scrobbling is None:
+            await self.print_debug('No scrobble to stop', prefix='TRAKT')
             return
-        current = await self.fetch_current_scrobble()
+        current = await self.calculate_current_scrobble()
         self.currently_scrobbling = None
         if current:
             progress = current.get('progress')
@@ -81,23 +70,10 @@ class TraktScrobbler(PlayStatusTracker, ABC):
                 )
                 await self.print_info(f'Paused {current}', prefix='TRAKT', success=True)
 
-    async def fetch_current_scrobble(self):
-        settings = Trakt['users/settings'].get()
-        try:
-            data = requests.get(
-                url='https://api.trakt.tv/users/{}/watching'.format(settings['user']['username']),
-                auth=self.BearerAuth(Trakt.configuration.defaults.data['oauth.token'])
-            ).json()
-        except JSONDecodeError:
-            await self.print_warning(f'Failed to fetch current scrobble')
-            return self.currently_scrobbling
-
-        started_at = parse(data['started_at'])
-        expires_at = parse(data['expires_at'])
+    async def calculate_current_scrobble(self):
+        kwargs, started_at, expires_at = self.currently_scrobbling
         now = datetime.now(pytz.utc)
-        return {
-            'movie': data.get('movie'),
-            'show': data.get('show'),
-            'episode': data.get('episode'),
-            'progress': (now-started_at).seconds / (expires_at-started_at).seconds * 100
-        }
+        progress = (now - started_at).seconds / (expires_at - started_at).seconds * 100
+        kwargs['progress'] = round(progress, 1)
+        return kwargs
+
