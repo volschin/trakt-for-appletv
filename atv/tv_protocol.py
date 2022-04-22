@@ -45,38 +45,45 @@ class TVProtocol(AsyncLogger, PushListener, DeviceListener):
     def connection_lost(self, exception: Exception) -> None:
         """ Called when the connection to the Apple TV is lost. """
         loop = asyncio.get_event_loop()
-        loop.create_task(self.print_warning(f'Connection lost: reconnecting...', failure=True))
-        asyncio.run_coroutine_threadsafe(self._startup(), loop)
+        asyncio.run_coroutine_threadsafe(self._reconnect('Connection lost'), loop)
 
     def connection_closed(self) -> None:
         """ Called when the connection to the Apple TV is closed. """
         loop = asyncio.get_event_loop()
-        loop.create_task(self.print_warning(f'Connection closed: reconnecting...', failure=True))
-        asyncio.run_coroutine_threadsafe(self._startup(), loop)
+        asyncio.run_coroutine_threadsafe(self._reconnect('Connection closed'), loop)
+
+    async def _reconnect(self, reason: str) -> None:
+        """ Reconnect to the Apple TV. """
+        self.atv = None
+        await self.print_warning(f'{reason}: reconnecting...', failure=True)
+        await self.cleanup(signal_handlers=False)
+        await self.setup(signal_handlers=False)
 
     async def shutdown(self) -> None:
         """ Gracefully shutdown the Apple TV before connection is complete, ignores subclasses."""
         await self.cleanup()
 
-    async def setup(self) -> None:
+    async def setup(self, signal_handlers=True) -> None:
         """ Add signal handlers to gracefully exit then connect to the Apple TV starting the push updater."""
         await super(TVProtocol, self).setup()
         loop = asyncio.get_event_loop()
         try:
-            loop.add_signal_handler(signal.SIGINT, _raise_graceful_exit)
-            loop.add_signal_handler(signal.SIGTERM, _raise_graceful_exit)
+            if signal_handlers:
+                loop.add_signal_handler(signal.SIGINT, _raise_graceful_exit)
+                loop.add_signal_handler(signal.SIGTERM, _raise_graceful_exit)
         except NotImplementedError:  # pragma: no cover
             # add_signal_handler is not implemented on Windows
             pass
         await self._startup()
         self.is_setup = True
 
-    async def cleanup(self) -> None:
+    async def cleanup(self, signal_handlers=True) -> None:
         """ Cleanup the Apple TV connection and remove signal handlers."""
         loop = asyncio.get_event_loop()
         try:
-            loop.remove_signal_handler(signal.SIGINT)
-            loop.remove_signal_handler(signal.SIGTERM)
+            if signal_handlers:
+                loop.remove_signal_handler(signal.SIGINT)
+                loop.remove_signal_handler(signal.SIGTERM)
         except NotImplementedError:  # pragma: no cover
             # remove_signal_handler is not implemented on Windows
             pass
@@ -86,6 +93,7 @@ class TVProtocol(AsyncLogger, PushListener, DeviceListener):
             self.atv.listener = None
             remaining_tasks = self.atv.close()
             await asyncio.wait_for(asyncio.gather(*remaining_tasks), 10.0)
+        self.is_setup = False
 
     async def _startup(self, delay=None) -> None:
         """ Connect to the Apple TV and start the push updater.

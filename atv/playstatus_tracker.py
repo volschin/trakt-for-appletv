@@ -80,9 +80,9 @@ class PlayStatusTracker(TVProtocol):
     prev_state: PlaybackState
 
     def __init__(self):
-        super().__init__()
         self.curr_state = PlaybackState(position=0, time=0)
         self.prev_state = PlaybackState(position=0, time=0)
+        super().__init__()
 
     def playstatus_update(self, updater, playstatus: Playing):
         """ Update the current playback state if the state is valid """
@@ -164,6 +164,12 @@ class PlayStatusTracker(TVProtocol):
         response = await self.protocol.send_and_receive(msg)
         state_dict: dict = MessageToDict(response)
         return state_dict
+
+    async def cleanup(self, **kwargs) -> None:
+        """ Cleanup the playback state manager """
+        self.curr_state = PlaybackState(position=0, time=0)
+        self.prev_state = PlaybackState(position=0, time=0)
+        await super().cleanup(**kwargs)
 
     @staticmethod
     def _handle_task_result(task: asyncio.Task) -> None:

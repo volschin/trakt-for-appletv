@@ -30,14 +30,14 @@ class ScrobblingProtocol(TraktScrobbler):
         # self.init_trakt()
         super(ScrobblingProtocol, self).__init__()
 
-    async def cleanup(self) -> None:
+    async def cleanup(self, **kwargs) -> None:
         """ Cancels any pending scrobble and closes the trakt connection """
         if self.pending_scrobble:
             self.pending_scrobble.cancel()
             self.pending_scrobble = None
 
         await self.stop_scrobbling(safe=True)
-        await super(ScrobblingProtocol, self).cleanup()
+        await super(ScrobblingProtocol, self).cleanup(**kwargs)
 
     def playstatus_changed(self):
         """ Called by the playstatus tracker when the play-state changes """
