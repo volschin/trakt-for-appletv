@@ -18,7 +18,7 @@ class AsyncLogger:
         try:
             await self.connect_stdin_stdout()
         except ValueError:
-            print("Headles Mode Enabled")
+            print("Headless Mode Enabled")
             self.headless = True
 
     async def connect_stdin_stdout(self):
