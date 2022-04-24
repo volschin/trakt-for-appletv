@@ -1,4 +1,4 @@
-# https://gist.github.com/jdowner/d4b4079678ed7ce39212
+# https://stackoverflow.com/questions/64303607/python-asyncio-how-to-read-stdin-and-write-to-stdout
 import asyncio
 import sys
 from typing import Optional
