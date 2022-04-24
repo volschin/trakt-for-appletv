@@ -7,8 +7,9 @@ from helpers.colors import Colors
 
 class AsyncLogger:
     def __init__(self, settings: dict):
-        self.level = self.calc_log_level(settings.get('log_level', 'info'))
-        self.log_file = settings.get('log_file', None)
+        logging = settings['logging'] if 'logging' in settings else {}
+        self.level = self.calc_log_level(logging.get('level', 'info'))
+        self.log_file = logging.get('file', None)
         self.headless = settings.get('headless', False)
         self.reader: Optional[asyncio.StreamReader] = None
         self.writer: Optional[asyncio.StreamWriter] = None
