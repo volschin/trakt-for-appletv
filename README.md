@@ -1,5 +1,5 @@
 # trakt-for-appletv
-Fork was originally intended for personal use, but decided to share it. Currently very much a work in progress. Change list will be added soon.
+Fork was originally intended for personal use, but decided to share it. Currently, very much a work in progress. Change list will be added soon.
 
 Trakt.tv scrobbler for Apple TV
 

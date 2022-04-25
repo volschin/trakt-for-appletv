@@ -2,15 +2,11 @@ import asyncio
 import re
 from json import JSONDecodeError
 from typing import Optional, Tuple
-from urllib.error import HTTPError
-from urllib.parse import urlencode
-from urllib.request import urlopen, Request
-
+import aiohttp
 from dateutil import parser
 from lxml import etree
 from io import BytesIO
 import json
-import requests
 
 from atv.trakt_scrobbler import TraktScrobbler
 
@@ -27,21 +23,24 @@ class ScrobblingProtocol(TraktScrobbler):
                              'com.netflix.Netflix': self.handle_netflix,
                              'com.amazon.aiv.AIVApp': self.handle_amazon}
         self.pending_scrobble = None
-        # self.init_trakt()
+        self.session: Optional[aiohttp.ClientSession] = None
         super(ScrobblingProtocol, self).__init__()
 
     async def cleanup(self, **kwargs) -> None:
-        """ Cancels any pending scrobble and closes the trakt connection """
+        """ Cancels any pending scrobble and closes the aiohttp session """
         if self.pending_scrobble:
             self.pending_scrobble.cancel()
             self.pending_scrobble = None
-
-        await self.stop_scrobbling(safe=True)
+        await self.session.close()
         await super(ScrobblingProtocol, self).cleanup(**kwargs)
+
+    async def setup(self, **kwargs) -> None:
+        """ Sets up the aiohttp session  """
+        self.session = aiohttp.ClientSession()
+        await super(ScrobblingProtocol, self).setup(**kwargs)
 
     def playstatus_changed(self):
         """ Called by the playstatus tracker when the play-state changes """
-
         # handle apps in app_handlers and any idle states
         if self.curr_state.app not in self.app_handlers and not self.curr_state.is_idle():
             # if we're currently scrobbling, we should handle any pause states
@@ -118,7 +117,8 @@ class ScrobblingProtocol(TraktScrobbler):
             return known['season'], known['episode']
 
         try:
-            result = requests.get(f'https://itunes.apple.com/lookup?id=' + content_identifier).json()
+            async with self.session.get(f'https://itunes.apple.com/lookup?id={content_identifier}') as resp:
+                result = await resp.json(content_type=None)
         except JSONDecodeError:
             await self.print_warning("JSON ERROR")
             result = {'resultCount': 0}
@@ -153,10 +153,8 @@ class ScrobblingProtocol(TraktScrobbler):
         if not match:
             return None
 
-        try:
-            data = urlopen(match.group(1)).read()
-        except HTTPError:
-            return None
+        async with self.session.get(match.group(1)) as resp:
+            data = await resp.read()
 
         xml = etree.parse(BytesIO(data), etree.HTMLParser())
         for script in xml.xpath('//script'):
@@ -184,13 +182,13 @@ class ScrobblingProtocol(TraktScrobbler):
         self.now_playing_description = await self.request_now_playing_description()
 
         query += ' "' + self.now_playing_description + '"'
-        try:
-            return urlopen(Request("https://bing.com/search?" + urlencode({"q": query}), headers={
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 '
-                              '(KHTML, like Gecko) Version/14.0 Safari/605.1.15'
-            })).read().decode('utf-8')
-        except HTTPError:
-            return None
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 '
+                          '(KHTML, like Gecko) Version/14.0 Safari/605.1.15'
+        }
+        async with self.session.get(
+                'https://www.bing.com/search', params={'q': query}, headers=headers) as response:
+            return await response.text()
 
     async def handle_tv_app(self) -> None:
         await self.handle_tvshows()
@@ -218,7 +216,7 @@ class ScrobblingProtocol(TraktScrobbler):
             title = self.netflix_titles.get(key)
             if not title:
                 if self.curr_state.content_identifier:
-                    title = self.get_netflix_title(self.curr_state.content_identifier)
+                    title = await self.get_netflix_title(self.curr_state.content_identifier)
                 else:
                     title = await self.get_netflix_title_from_description(match.group(1), match.group(3))
                     if not title:
@@ -250,8 +248,8 @@ class ScrobblingProtocol(TraktScrobbler):
         if known:
             return known['title'], known['season'], known['episode']
         url = self.settings['amazon']['get_playback_resources_url'] % content_identifier
-        r = Request(url, None, {'Cookie': self.settings['amazon']['cookie']})
-        data = json.loads(urlopen(r).read().decode('utf-8'))
+        r = await self.session.request(url=url, method='GET', headers={'Cookie': self.settings['amazon']['cookie']})
+        data = await r.json()
         title = None
         season = None
         episode = data['catalogMetadata']['catalog']['episodeNumber']
@@ -274,13 +272,14 @@ class ScrobblingProtocol(TraktScrobbler):
         if not match:
             return None
         content_identifier = match.group(2)
-        title = self.get_netflix_title(content_identifier)
+        title = await self.get_netflix_title(content_identifier)
         return title
 
-    @staticmethod
-    def get_netflix_title(content_identifier):
+    async def get_netflix_title(self, content_identifier):
         """ Gets the title from netflix.com of the given content identifier."""
-        data = urlopen('https://www.netflix.com/title/' + content_identifier).read()
+        # data = urlopen('https://www.netflix.com/title/' + content_identifier).read()
+        async with self.session.get('https://www.netflix.com/title/' + content_identifier) as r:
+            data = await r.read()
         xml = etree.parse(BytesIO(data), etree.HTMLParser())
         info = json.loads(xml.xpath('//script')[0].text)
         return info['name']

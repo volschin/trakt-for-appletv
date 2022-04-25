@@ -1,8 +1,11 @@
-pyatv>=0.10.0
+pyatv
 pytz
 requests
 python-dateutil
-trakt.py
+protobuf
+aiohttp
+cchardet
+aiodns
 PyYAML
 lxml
-protobuf
+async_retrying
