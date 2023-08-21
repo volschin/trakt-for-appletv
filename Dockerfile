@@ -17,5 +17,5 @@ USER tvremote
 COPY . /opt/TVRemote
 WORKDIR /opt/TVRemote
 VOLUME /opt/TVRemote/data
-ENTRYPOINT ["/bin/sh", "entrypoint.sh"]
+#ENTRYPOINT ["/bin/sh", "entrypoint.sh"]
 CMD ["python3", "tvscrobbler.py"]
