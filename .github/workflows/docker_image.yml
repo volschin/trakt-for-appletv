@@ -57,7 +57,7 @@ jobs:
       - 
         name: Scan image for vulnerabilities 
         id: scan
-        uses: crazy-max/ghaction-container-scan@v2
+        uses: crazy-max/ghaction-container-scan@v3
         with:
           image: ${{ env.tag }}
           dockerfile: ./Dockerfile
